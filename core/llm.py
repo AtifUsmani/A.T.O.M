@@ -64,6 +64,7 @@ class LLM():
         self.config_file = config_file
         self.tools = tools
         self.system_prompt = system_prompt
+        self.judge_model_ready = False
 
         # -----------------------------
         # Load YAML config safely
@@ -121,8 +122,10 @@ class LLM():
                 max_retries=3,
                 timeout=400
             )
+            self.judge_model_ready = True
         except Exception as e:
             print(f"[ERROR] Failed to initialize ChatOpenAI model: {e}")
+            self.judge_model_ready = False
             self.model = None
 
         # client = chromadb.PersistentClient(path="./atom_db")

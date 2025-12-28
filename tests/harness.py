@@ -5,7 +5,9 @@ import json
 import time
 import io
 from contextlib import redirect_stdout
+from tools import tools
 import tests.debug.tool_calls as tool_log
+tools.tool_log = tool_log
 # import debug.tool_calls as tool_log
 
 # Make project root importable

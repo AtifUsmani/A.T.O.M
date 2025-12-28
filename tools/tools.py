@@ -8,7 +8,8 @@ from robots.robotic_arm import RoboticArm
 from langchain_community.utilities import SearxSearchWrapper
 from memory.memory_tool import retrieve_memory, write_memory_tool_async
 import yaml
-from tests.harness import tool_log
+from debug import tool_calls as tool_log
+# from tests.harness import tool_log
 
 with open('config.yaml', "r") as file:
     config = yaml.safe_load(file) or {}
@@ -174,9 +175,16 @@ def get_temperature() -> str:
     """Retrieves the current room temperature from Home Assistant."""
     try:
         response = ha_wrapper.get_temperature()
-        tool_log.record_tool_call("get_temperature", {"response": response})
+        tool_log.record_tool_call("get_temperature", {
+            "success": True,
+            "response": response
+        })
         return response
     except Exception as e:
+        tool_log.record_tool_call("get_temperature", {
+            "success": False,
+            "error": str(e)
+        })
         return f"[ERROR] Failed to get temperature: {e}"
 
 @tool

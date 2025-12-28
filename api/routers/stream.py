@@ -1,6 +1,6 @@
 # api/routers/stream.py
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from core.llm import LLM
 import json
@@ -15,20 +15,24 @@ with open("config.yaml", "r") as file:
 
 async def stream_generator(user_input: str):
     try:
-        for chunk in brain.generate_chunks(user_input, config['USER_ID']):
-            event = f"data: {json.dumps({'delta': chunk})}\n\n"
-            yield event
+        for chunk in brain.generate_chunks(user_input, config["USER_ID"]):
+            # send ONLY the new piece
+            yield str(chunk)
             await asyncio.sleep(0)
-        # Send a final event to indicate completion
-        yield "data: [DONE]\n\n"
-    except Exception as e:
-        # Send an error event
-        error_event = f"data: {json.dumps({'error': str(e)})}\n\n"
-        yield error_event
 
-@router.get("")
-def stream(message: str):
+    except Exception as e:
+        yield f"ERROR: {str(e)}"
+
+@router.post("")
+async def stream(request: Request):
+    body = await request.json()
+    user = body.get("command", "")
+
     return StreamingResponse(
-        stream_generator(message),
-        media_type="text/event-stream"
+        stream_generator(user),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
     )

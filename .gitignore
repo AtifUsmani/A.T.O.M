@@ -206,3 +206,9 @@ tts/output.wav
 tests/other_scenarios
 tests/reports
 plan.txt
+
+# Next.js / React stuff
+frontend/react_interface/node_modules/
+frontend/react_interface/.next/
+frontend/react_interface/out/
+frontend/react_interface/.turbo/

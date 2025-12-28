@@ -12,6 +12,29 @@ executor = ThreadPoolExecutor(max_workers=1)
 
 from fastapi import UploadFile, File
 
+@router.get("/health")
+async def stt_health():
+    """
+    Reports whether STT engine is initialized and available.
+    Does NOT trigger microphone or transcription.
+    """
+
+    try:
+        # If STT object exists, attempt a lightweight internal readiness check
+        if stt is None:
+            return {"status": "Offline"}
+
+        # Many engines have `.running`, `.alive`, or similar.
+        # If yours doesn't, this won't break — it's optional.
+        if hasattr(stt, "running") and not stt.running:
+            return {"status": "Offline"}
+
+        return {"status": "Listening"}
+
+    except Exception as e:
+        print("STT HEALTH ERROR:", e)
+        return {"status": "Offline", "error": str(e)}
+
 @router.post("/file")
 async def stt_from_file(file: UploadFile = File(...)):
     audio_bytes = await file.read()

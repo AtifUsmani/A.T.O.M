@@ -207,6 +207,8 @@ ATOM has it.
 
 ## 🏗️ Architecture Overview
 
+The Architecture is also viewable [here](./assets/architecture.png)
+
 ```mermaid
 flowchart TB
 
