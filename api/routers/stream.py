@@ -15,13 +15,19 @@ with open("config.yaml", "r") as file:
 
 async def stream_generator(user_input: str):
     try:
+        full = ""
         for chunk in brain.generate_chunks(user_input, config["USER_ID"]):
-            # send ONLY the new piece
-            yield str(chunk)
+            full += str(chunk)
+            yield json.dumps({
+                "text": full
+            }) + "\n"
             await asyncio.sleep(0)
+            print("RAW CHUNK:", repr(chunk))
 
+        # optional explicit done message
+        yield json.dumps({"done": True}) + "\n"
     except Exception as e:
-        yield f"ERROR: {str(e)}"
+        yield json.dumps({"error": str(e)}) + "\n"
 
 @router.post("")
 async def stream(request: Request):
@@ -30,7 +36,7 @@ async def stream(request: Request):
 
     return StreamingResponse(
         stream_generator(user),
-        media_type="text/plain",
+        media_type="application/x-ndjson",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",

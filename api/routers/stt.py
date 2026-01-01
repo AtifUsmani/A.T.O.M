@@ -4,6 +4,12 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel
 import base64
+import uuid
+import time
+import logging
+
+logger = logging.getLogger("stt")
+logger.setLevel(logging.DEBUG)
 
 router = APIRouter()
 
@@ -76,28 +82,62 @@ class STTJsonRequest(BaseModel):
 
 @router.post("")
 async def stt_from_json(req: STTJsonRequest):
-    """
-    Accepts:
-        { "audio": "data:audio/wav;base64,AAAA..." }
-         or
-        { "audio": "AAAA..." }
+    req_id = str(uuid.uuid4())[:8]
+    start = time.time()
 
-    Returns:
-        { "text": "...." }
-    """
+    logger.info(f"[{req_id}] STT request received")
 
     try:
         audio_str = req.audio
 
+        if not audio_str:
+            logger.error(f"[{req_id}] Missing audio field")
+            raise HTTPException(status_code=400, detail="audio field is empty")
+
         # Strip data URI header if present
         if "," in audio_str:
-            audio_str = audio_str.split(",")[1]
+            logger.debug(f"[{req_id}] Detected data URI format, stripping header")
+            audio_str = audio_str.split(",", 1)[1]
 
-        audio_bytes = base64.b64decode(audio_str)
+        # Log length BEFORE decoding so we know client behavior
+        logger.debug(f"[{req_id}] Base64 length: {len(audio_str)}")
 
+        try:
+            audio_bytes = base64.b64decode(audio_str)
+        except Exception as decode_err:
+            logger.exception(f"[{req_id}] Base64 decode failed")
+            raise HTTPException(status_code=400, detail=f"Invalid base64 audio: {decode_err}")
+
+        logger.debug(f"[{req_id}] Decoded bytes size: {len(audio_bytes)} bytes")
+
+        # OPTIONAL: Write incoming audio to disk for debugging
+        try:
+            debug_path = f"/tmp/stt_{req_id}.wav"
+            with open(debug_path, "wb") as f:
+                f.write(audio_bytes)
+            logger.info(f"[{req_id}] Saved debug audio: {debug_path}")
+        except Exception as save_err:
+            logger.warning(f"[{req_id}] Failed to save debug audio: {save_err}")
+
+        # Actual STT call
+        logger.info(f"[{req_id}] Starting transcription...")
         text = stt.transcribe_for_api(audio_bytes)
+        duration = time.time() - start
 
-        return {"text": text}
+        logger.info(f"[{req_id}] STT Success in {duration:.2f}s -> '{text}'")
+
+        return {
+            "text": text,
+            "debug": {
+                "request_id": req_id,
+                "duration_sec": round(duration, 2),
+                "bytes_received": len(audio_bytes),
+            }
+        }
+
+    except HTTPException:
+        raise
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"STT failed: {e}")
+        logger.exception(f"[{req_id}] STT crashed unexpectedly")
+        raise HTTPException(status_code=500, detail=f"STT failed [{req_id}]: {e}")
