@@ -2,13 +2,10 @@
 
 import sys
 import signal
-import yaml
 import os
 import threading
 from tqdm import tqdm
-
-with open("config.yaml", "r") as file:
-    config = yaml.safe_load(file) or {}
+from core.config import cfg as config
 
 def ensure_generated_folder():
     folder_name = "generated"
@@ -18,8 +15,6 @@ def ensure_generated_folder():
 ensure_generated_folder()
 
 USE_STT = bool(config['USE_STT'])
-USE_TTS = bool(config['USE_TTS'])
-USE_EDGE_TTS = bool(config['USE_EDGE_TTS'])
 
 from core.llm import LLM
 brain = LLM()
@@ -70,22 +65,39 @@ def init_stt(progress_bar):
             USE_STT = False
 
 def init_tts(progress_bar):
-    global voiceEngine, USE_TTS
-    if USE_TTS:
-        if USE_EDGE_TTS:
-            from tts.tts_edge import TTS
-        else:
-            from tts.tts_piper import TTS
-        try:
-            voiceEngine = TTS()
-            from tts.voice import set_voice_engine
-            set_voice_engine(voiceEngine)
-            progress_bar.update(1)
-        except Exception as e:
-            print(f"[ERROR] Failed to initialize TTS: {e}")
-            progress_bar.update(1)
-            voiceEngine = None
-            USE_TTS = False
+    from tts.voice import set_voice_engine
+
+    tts_cfg = config.get("tts", {})
+    tts_enabled = tts_cfg.get("enabled", False)
+
+    if not tts_enabled:
+        set_voice_engine(None)
+        progress_bar.update(1)
+        return
+
+    engine_name = tts_cfg.get("engine")
+
+    from tts.registry import TTS_ENGINES
+    engine_cls = TTS_ENGINES.get(engine_name)
+
+    if not engine_cls:
+        print(
+            f"[ERROR] Unknown TTS engine '{engine_name}'. "
+            f"Available: {', '.join(TTS_ENGINES)}"
+        )
+        set_voice_engine(None)
+        progress_bar.update(1)
+        return
+
+    try:
+        engine = engine_cls()
+        set_voice_engine(engine)
+        progress_bar.update(1)
+
+    except Exception as e:
+        print(f"[ERROR] Failed to initialize TTS ({engine_name}): {e}")
+        set_voice_engine(None)
+        progress_bar.update(1)
 
 def initialize():
     with tqdm(total=6, desc="Initializing") as progress_bar:
@@ -134,10 +146,12 @@ def graceful_exit(*args):
     except Exception as e:
         print(f"[WARN] Failed to shut down STT cleanly: {e}")
     try:
-        if USE_TTS and voiceEngine:
-            voiceEngine.close() if hasattr(voiceEngine, "close") else None
+        from tts.voice import voiceEngine
+        if voiceEngine and hasattr(voiceEngine, "close"):
+            voiceEngine.close()
     except Exception as e:
         print(f"[WARN] Failed to shut down TTS cleanly: {e}")
+
     try:
         if hasattr(brain, "shutdown"):
             brain.shutdown()

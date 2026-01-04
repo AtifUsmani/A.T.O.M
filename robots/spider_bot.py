@@ -1,11 +1,8 @@
 import requests
-import yaml
+from core.config import cfg as config
 
 class SPIDER():
     def __init__(self, config_file = "config.yaml"):
-        with open(config_file, "r") as file:
-            config = yaml.safe_load(file)
-
         self.ip = config['SPIDER-BOT']['IP_ADDRESS']
 
     def greet(self):

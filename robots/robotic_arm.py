@@ -1,17 +1,14 @@
 import math
 import json
 import websocket
-import yaml
+from core.config import cfg as config
 
 L1 = 12.0
 L2 = 12.0
 last_pose = None
 
 class WS_CONNECT:
-    def __init__(self, config_file = "config.yaml"):
-        with open(config_file, "r") as file:
-            config = yaml.safe_load(file)
-
+    def __init__(self):
         self.ESP32_WS_URL = f"ws://{config['ROBOT-ARM']['IP_ADDRESS']}:81/"
         self.ws = None
 
@@ -55,8 +52,8 @@ class WS_CONNECT:
         self.ws.close()
 
 class RoboticArm:
-    def __init__(self, config_file = "config.yaml"):
-        self.robot_control = WS_CONNECT(config_file)
+    def __init__(self):
+        self.robot_control = WS_CONNECT()
 
     def IK(self, x, y, z):
         # Base rotation
