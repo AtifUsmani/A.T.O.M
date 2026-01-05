@@ -3,9 +3,6 @@ from pydantic import BaseModel
 import tts.voice as voice
 from fastapi.responses import StreamingResponse, FileResponse
 import io
-import wave
-import soundfile as sf
-import tempfile
 import os
 import inspect
 
@@ -70,39 +67,6 @@ async def tts_health():
 
 #     except Exception as e:
 #         raise HTTPException(status_code=500, detail=f"TTS failed: {e}")
-
-# @router.post("/generate")
-# async def tts_generate(req: TTSRequest):
-#     if not voice.voiceEngine:
-#         raise HTTPException(status_code=503, detail="TTS engine not initialized")
-
-#     try:
-#         text = voice.voiceEngine.clean_for_tts(req.text)
-
-#         # temp wav file
-#         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-#             wav_path = tmp.name
-
-#         # --- EDGE TTS SUPPORT ---
-#         if hasattr(voice.voiceEngine, "VOICE"):
-#             # Edge-TTS
-#             import edge_tts
-#             communicate = edge_tts.Communicate(text, voice.voiceEngine.VOICE)
-#             await communicate.save(wav_path)
-#         else:
-#             # Piper fallback
-#             with wave.open(wav_path, "wb") as wav_file:
-#                 voice.voiceEngine.voice.synthesize_wav(text, wav_file)
-
-#         # return wav bytes
-#         with open(wav_path, "rb") as f:
-#             audio_bytes = f.read()
-
-#         os.remove(wav_path)
-#         return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/wav")
-
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"TTS generate failed: {e}")
 
 @router.post("/generate")
 async def tts_generate(req: TTSRequest):
