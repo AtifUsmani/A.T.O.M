@@ -38,16 +38,18 @@ Unlike cloud assistants, ATOM is built with:
 * Real-time streaming speech recognition (RealtimeSTT)
 * Configurable voice synthesis:
 
-  * **Edge-TTS** *(toggle in config)*
+  * **Supertonic TTS**
+  * **Edge-TTS**
   * fallback **Piper-TTS**
 * CLI + Streamlit UI
 * Tool calling with narration for human-like interaction
 
 ## 🔐 Privacy Note — Edge-TTS
 
-ATOM supports two Text-to-Speech backends:
+ATOM supports three Text-to-Speech backends:
 
 - **Edge-TTS** (default toggle)
+- **Supertonic TTS** (fully local and good audio quality)
 - **Piper-TTS** (fully local)
 
 ⚠️ **Important Privacy Notice**
@@ -509,7 +511,7 @@ ATOM is an actively evolving research system. Some components may be experimenta
 | PDF Creation   | [ReportLab](https://www.reportlab.com/)          |
 | Weather   | [Open-Meteo API](https://open-meteo.com/)          |
 | Home Automation   | [Home Assistant](https://www.home-assistant.io/)          |
-| TTS        | [Edge-TTS](https://github.com/rany2/edge-tts) / [Piper](https://github.com/OHF-Voice/piper1-gpl)              |
+| TTS        | [Edge-TTS](https://github.com/rany2/edge-tts) / [Piper](https://github.com/OHF-Voice/piper1-gpl) / [Supertonic-TTS](https://github.com/supertone-inc/supertonic)              |
 
 ## 🧪 Research Directions
 

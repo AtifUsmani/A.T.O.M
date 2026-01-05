@@ -2,9 +2,22 @@
 # General Configuration
 # ================================
 USE_STT: True         # Either True/False
-USE_TTS: True         # Either True/False
-USE_EDGE_TTS: True    # Either True/False (If disabled, Piper-TTS will be used.)
 ROBOTIC_ARM: False    # Either True/False
+
+tts:
+  enabled: true
+
+  # Available engines:
+  # - edge
+  # - supertonic
+  # - piper
+  engine: supertonic
+
+  supertonic:
+    voice: F2
+
+  edge:
+    voice: en-US-AvaNeural
 
 # ================================
 # User Configuration
