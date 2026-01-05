@@ -325,7 +325,7 @@ subgraph Core ["Core Assistant Engine"]
     LLM[Qwen 4B via LM Studio<br/>Vision + Tool Calling]
     TOOLS[Tool Execution Layer<br/>System • APIs • Robotics]
     LOGGER[JSON Conversation Logger]
-    TTS[TTS Output<br/>Piper or Edge TTS]
+    TTS[TTS Output<br/>Piper / Edge TTS / Supertonic TTS]
 end
 
 
