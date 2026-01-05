@@ -2,15 +2,13 @@
 
 from fastapi import APIRouter, Request
 from core.llm import LLM
-import yaml
 import json
 import asyncio
 from fastapi.responses import StreamingResponse
+from core.config import cfg as config
+
 router = APIRouter()
 brain = LLM()
-
-with open("config.yaml", "r") as file:
-    config = yaml.safe_load(file) or {}
 
 async def stream_generator(user_input: str):
     try:

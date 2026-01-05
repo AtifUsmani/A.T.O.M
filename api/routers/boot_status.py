@@ -2,12 +2,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 import asyncio
 import httpx
-import yaml
+from core.config import cfg as config
 
 router = APIRouter(prefix="/api", tags=["boot"])
-
-with open("config.yaml", "r") as f:
-    config = yaml.safe_load(f) or {}
 
 # =========================
 # HEALTH HELPERS

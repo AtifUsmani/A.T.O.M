@@ -1,14 +1,10 @@
 import cv2
 import time
 from langchain_openai import ChatOpenAI
-import yaml
 from langchain.messages import HumanMessage, AIMessage, SystemMessage
-
+from core.config import cfg as config
 class Camera():
     def __init__(self, camera_index = 0, yaml_file = "config.yaml"):
-        with open(yaml_file, "r") as file:
-            config = yaml.safe_load(file)
-
         self.camera_index = camera_index
 
         self.model_name = config['LLM']['MODEL_NAME']

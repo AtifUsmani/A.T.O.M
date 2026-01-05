@@ -5,13 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routers import chat, stream, stt, system, health, weather, boot_status, memory, tools, news, tts, speech
 import signal
 import sys, yaml
-from tts.voice import set_voice_engine
-from tts.tts_edge import TTS as EdgeTTS
-from tts.tts_piper import TTS as PiperTTS
-from tts.voice import set_voice_engine
-
-with open("config.yaml", "r") as f:
-    cfg = yaml.safe_load(f) or {}
+from core.config import cfg
 
 try:
     from core.lms import LMSTUDIO
@@ -28,50 +22,35 @@ try:
 except Exception as e:
     print(f"[ERROR] Failed to initialize Model: {e}")
 
-with open("config.yaml", "r") as file:
-    config = yaml.safe_load(file) or {}
-
 app = FastAPI(title="ATOM API", version="1.0")
-
-
-@app.on_event("startup")
-async def setup_tts():
-    try:
-        with open("config.yaml", "r") as f:
-            config = yaml.safe_load(f) or {}
-
-        USE_TTS = config.get("USE_TTS", False)
-        USE_EDGE_TTS = config.get("USE_EDGE_TTS", False)
-
-        if not USE_TTS:
-            print("TTS disabled in config.yaml")
-            return
-
-        if USE_EDGE_TTS:
-            from tts.tts_edge import TTS
-        else:
-            from tts.tts_piper import TTS
-
-        engine = TTS()
-        set_voice_engine(engine)
-        print("TTS READY 🎤")
-
-    except Exception as e:
-        print("FAILED TO INIT TTS ❌", e)
 
 @app.on_event("startup")
 def init_tts():
-    if not cfg.get("USE_TTS", False):
-        return
-
     try:
-        if cfg.get("USE_EDGE_TTS", False):
-            engine = EdgeTTS()
-        else:
-            engine = PiperTTS()
+        tts_cfg = cfg.get("tts", {})
 
+        if not tts_cfg.get("enabled", False):
+            print("🔇 TTS disabled in config")
+            return
+
+        engine_name = tts_cfg.get("engine")
+
+        from tts.registry import TTS_ENGINES
+        from tts.voice import set_voice_engine
+
+        engine_cls = TTS_ENGINES.get(engine_name)
+        if not engine_cls:
+            raise RuntimeError(
+                f"Unknown TTS engine '{engine_name}'. "
+                f"Available: {', '.join(TTS_ENGINES)}"
+            )
+
+        engine = engine_cls()   # ✅ correct
         set_voice_engine(engine)
-        print("🔥 FastAPI TTS Engine Initialized")
+
+        mode = getattr(engine, "engine_name", engine_cls.__name__)
+        print(f"🔥 FastAPI TTS Engine Initialized ({mode})")
+
     except Exception as e:
         print("❌ Failed to init TTS:", e)
 
@@ -99,7 +78,7 @@ app.include_router(speech.router)
 def graceful_exit(*args):
     print("\n\n[INFO] Shutting down ATOM...")
 
-    if config["ROBOTIC_ARM"]:
+    if cfg["ROBOTIC_ARM"]:
         try:
             from tools.tools import close_connections
             close_connections()

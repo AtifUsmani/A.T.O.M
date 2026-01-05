@@ -5,12 +5,9 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from datetime import datetime
-import yaml
+from core.config import cfg as config
 
 console = Console()
-
-with open("config.yaml", "r") as file:
-    config = yaml.safe_load(file) or {}
 
 user_id = config["USER_ID"]
 class CLIStreamer:

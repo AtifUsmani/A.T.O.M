@@ -7,9 +7,13 @@ import re
 import edge_tts
 import sounddevice as sd
 import soundfile as sf
+from core.config import cfg as config
 
-class TTS:
+class ATOM_TTS:
+    engine_name = "Edge-TTS"
     def __init__(self):
+        tts_cfg = config.get("tts", {})
+        my_cfg = tts_cfg.get("edge", {})
 
         # Queues
         self.text_queue = Queue()
@@ -24,7 +28,7 @@ class TTS:
         self.buffer = ""
         # Sentence boundary regex
         self.boundary = re.compile(r"[.!?;:\n]")
-        self.VOICE = "en-US-AvaNeural"
+        self.VOICE = my_cfg.get("voice", "en-US-AvaNeural")
 
     def clean_for_tts(self, text: str) -> str:
         # remove code fences
@@ -89,8 +93,8 @@ class TTS:
 
         return text.strip()
 
-    def text_to_wav(self, llm_output):
-        communicate = edge_tts.Communicate(self.clean_for_tts(llm_output), self.VOICE)
+    def text_to_wav(self, text:str):
+        communicate = edge_tts.Communicate(self.clean_for_tts(text), self.VOICE)
         communicate.save_sync("tts/output.wav")
 
     def play_wav_nonblocking(self, path = "tts/output.wav"):

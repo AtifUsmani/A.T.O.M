@@ -1,9 +1,5 @@
 import requests
-import yaml
-
-# Load the YAML config
-with open("config.yaml", "r") as file:
-    config = yaml.safe_load(file)
+from core.config import cfg as config
 
 # Load Home Assistant configuration from env vars
 HASS_URL = config["HA"]["HASS_URL"]

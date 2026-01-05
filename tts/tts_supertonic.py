@@ -1,20 +1,16 @@
-import subprocess
+from supertonic import TTS
 import threading
-import numpy as np
 from queue import Queue, Empty
 import re
-import wave
-from piper import PiperVoice
 import sounddevice as sd
 import soundfile as sf
-import io
+from core.config import cfg as config
 
 class ATOM_TTS:
-    engine_name = "Piper-TTS"
-
-    def __init__(self, model_path="tts/en_US-lessac-medium.onnx", sample_rate=22050):
-        self.model_path = model_path
-        self.sample_rate = sample_rate
+    engine_name = "Supertonic"
+    def __init__(self):
+        tts_cfg = config.get("tts", {})
+        my_cfg = tts_cfg.get("supertonic", {})
 
         # Queues
         self.text_queue = Queue()
@@ -27,10 +23,10 @@ class ATOM_TTS:
 
         # Buffer for sentence aggregation
         self.buffer = ""
-
         # Sentence boundary regex
         self.boundary = re.compile(r"[.!?;:\n]")
-        self.voice = PiperVoice.load(self.model_path)
+        self.tts = TTS(auto_download=True)
+        self.style = self.tts.get_voice_style(voice_name=my_cfg.get("voice", "M1"))
 
     def clean_for_tts(self, text: str) -> str:
         # remove code fences
@@ -96,24 +92,12 @@ class ATOM_TTS:
         return text.strip()
 
     def text_to_wav(self, text:str):
-        with wave.open("tts/output.wav", "wb") as wav_file:
-            self.voice.synthesize_wav(self.clean_for_tts(text), wav_file)
+        wav, duration = self.tts.synthesize(self.clean_for_tts(text), voice_style=self.style)
+        self.tts.save_audio(wav, "tts/output.wav")
 
     def play_wav_nonblocking(self, path = "tts/output.wav"):
         data, samplerate = sf.read(path)
         sd.play(data, samplerate, blocking=False)  # non-blocking
-
-    # -----------------------------------------------------------
-    # INTERNAL: convert text → PCM using Piper
-    # -----------------------------------------------------------
-    def _synthesize(self, text):
-        p = subprocess.Popen(
-            ["piper", "--model", self.model_path, "--output_raw"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE
-        )
-        raw, _ = p.communicate(text.encode("utf-8"))
-        return np.frombuffer(raw, dtype=np.int16)
 
     # -----------------------------------------------------------
     # BACKGROUND: TTS worker (reads buffered sentences)
@@ -130,23 +114,17 @@ class ATOM_TTS:
 
             sentence = self.clean_for_tts(sentence)
 
-            buffer = io.BytesIO()
+            # synth to wav
+            wav, duration = self.tts.synthesize(sentence, voice_style=self.style)
+            self.tts.save_audio(wav, "tts/output.wav")
 
-            with wave.open(buffer, "wb") as wav_file:
-                self.voice.synthesize_wav(sentence, wav_file)
+            # load wav to pcm
+            data, samplerate = sf.read("tts/output.wav", dtype="int16")
 
-            # rewind buffer
-            buffer.seek(0)
-
-            data, sr = sf.read(buffer, dtype="int16")
-
-            self.sample_rate = sr
-            pcm = data
-
-            self.audio_queue.put(pcm)
+            self.sample_rate = samplerate
+            self.audio_queue.put(data)
 
         self.audio_queue.put(None)
-
 
     # -----------------------------------------------------------
     # BACKGROUND: audio playback worker
@@ -156,53 +134,7 @@ class ATOM_TTS:
             pcm = self.audio_queue.get()
 
             if pcm is None:
-                sd.wait()
                 break
 
             sd.play(pcm, samplerate=self.sample_rate)
             sd.wait()
-
-    # -----------------------------------------------------------
-    # PUBLIC: Push streaming text (this is called from LLM loop)
-    # -----------------------------------------------------------
-    def push_text(self, text_chunk):
-        """
-        Accept raw delta tokens from the LLM
-        and convert them into full sentences.
-        """
-
-        if not text_chunk:
-            return
-
-        self.buffer += text_chunk
-
-        # If a sentence boundary exists → flush one full sentence
-        if self.boundary.search(self.buffer):
-            sentences = re.split(r"([.!?;:\n])", self.buffer)
-
-            # Combine pairs: ["Hello", ".", " How are", "?", " ..."]
-            combined = []
-            for i in range(0, len(sentences) - 1, 2):
-                combined.append(sentences[i] + sentences[i+1])
-
-            # Send complete sentences to TTS
-            for s in combined:
-                clean = s.strip()
-                if clean:
-                    self.text_queue.put(clean)
-
-            # Keep the leftover partial sentence
-            self.buffer = sentences[-1]
-
-    # -----------------------------------------------------------
-    # PUBLIC: call at the end to flush leftover text
-    # -----------------------------------------------------------
-    def finish(self):
-        leftover = self.buffer.strip()
-        if leftover:
-            self.text_queue.put(leftover)
-
-        self.buffer = ""
-
-        self.text_queue.put(None)
-        self.running = False

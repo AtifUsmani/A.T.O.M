@@ -51,7 +51,7 @@ class TTSMiddlewareFrontend(AgentMiddleware):
     def silence_during_tool(request, handler):
         try:
             emit_sse({"type": "silence"})
-            print("🤫 SSE SILENCE")
+            # print("🤫 SSE SILENCE")
         except:
             pass
 

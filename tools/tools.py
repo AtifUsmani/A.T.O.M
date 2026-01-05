@@ -7,12 +7,9 @@ from robots.spider_bot import SPIDER
 from robots.robotic_arm import RoboticArm
 from langchain_community.utilities import SearxSearchWrapper
 from memory.memory_tool import retrieve_memory, write_memory_tool_async
-import yaml
 from debug import tool_calls as tool_log
 # from tests.harness import tool_log
-
-with open('config.yaml', "r") as file:
-    config = yaml.safe_load(file) or {}
+from core.config import cfg as config
 
 ha_wrapper = HomeAssistant()
 search = SearxSearchWrapper(searx_host=config['SEARXNG_URL'])
