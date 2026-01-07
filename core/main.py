@@ -208,6 +208,9 @@ def main():
                 
             except Exception as e:
                 print(f"\n[ERROR] CLI/LLM streaming error: {e}")
+                # import traceback
+                # print("🔥 FULL TRACEBACK:")
+                # traceback.print_exc()
 
             # if USE_TTS and voiceEngine:
             #     try:

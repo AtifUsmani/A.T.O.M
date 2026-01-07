@@ -10,15 +10,17 @@ from tools.tools import tools
 from tools.system_tools import system_tools
 from langgraph.runtime import Runtime
 from typing import Any
-from memory.long_term_memory import LongTermMemory
 from memory.memory_write_middleware import AsyncMemoryWriteMiddleware
-from debug.token_debug_middleware import TokenDebugMiddleware
+from memory.long_term_memory import LongTermMemory
 from debug.json_logging_middleware import JSONLoggingMiddleware
 from embedding.embedding_client import FastAPIEmbeddings
 from memory.chroma_store import get_chroma_store
 from memory.memory_injection import PeriodicJudgeMiddleware, JudgedMemoryInjectionMiddleware
 from tts.middleware import TTSMiddleware
 from tts.middleware_frontend import TTSMiddlewareFrontend
+from memory.memory_retrieval_middleware import MemoryRetrievalMiddleware
+from core.systemprompt import EnsureSystemPromptMiddleware
+from debug.debug_middleware import debug_middleware
 
 # Load the prompt from a text file
 with open("prompt.txt", "r", encoding="utf-8") as f:
@@ -134,10 +136,11 @@ class LLM():
         self.store = get_chroma_store()
 
         self.long_term_memory = LongTermMemory(store=self.store)
-        # memory_retriever = MemoryRetrievalMiddleware(self.long_term_memory)
-        memory_writer = AsyncMemoryWriteMiddleware(self.long_term_memory, self.summary_model)
-        debugger = TokenDebugMiddleware(tokenizer=self.model.get_num_tokens)
-
+        memory_retriever = MemoryRetrievalMiddleware(self.long_term_memory)
+        memory_writer = AsyncMemoryWriteMiddleware(
+            memory=self.long_term_memory,
+            judge_model=self.summary_model,
+        )
         # -----------------------------
         # Validate tools list
         # -----------------------------
@@ -155,20 +158,21 @@ class LLM():
             self.agent = create_agent(
                 self.model,
                 tools=self.tools,
-                system_prompt=self.system_prompt,
+                # system_prompt=self.system_prompt,
                 middleware=[
-                    # debugger,
+                    EnsureSystemPromptMiddleware(system_prompt=atom_prompt),
                     JSONLoggingMiddleware(output_file='atom_logs.json'),
                     TTSMiddleware(),           # <---Comment this for Web UI
                     TTSMiddlewareFrontend(),      # <---Uncomment this for Web UI
-                    PeriodicJudgeMiddleware(self.summary_model, self.store, config['USER_ID'], 10),
-                    JudgedMemoryInjectionMiddleware(config['USER_ID']),
+                    # PeriodicJudgeMiddleware(self.summary_model, self.store, config['USER_ID'], 10),
+                    # JudgedMemoryInjectionMiddleware(config['USER_ID']),
                     trim_messages,
                     SummarizationMiddleware(
                         model=self.summary_model,
                         trigger=("tokens", 8000),
                         keep=("messages", 20),
                     ),
+                    memory_retriever,
                     memory_writer,
                     ToolRetryMiddleware(
                         max_retries=3,
@@ -179,6 +183,7 @@ class LLM():
                         root_path=Path(__file__).resolve(),
                         use_ripgrep=True,
                     ),
+                    debug_middleware,
                     handle_tool_errors,
                 ],
                 checkpointer=InMemorySaver(),
@@ -188,28 +193,6 @@ class LLM():
         except Exception as e:
             print(f"[ERROR] Failed to create agent: {e}")
             self.agent = None
-
-    def retrieve_context(self, user_input: str) -> str:
-        # Retrieve similar memories
-        results = self.store.similarity_search(user_input, k=1)
-
-        # results = self.store.similarity_search_by_vector(
-        #     embedding=self.embeddings.embed_query(user_input), k=3
-        # )
-
-        if not results:
-            return ""
-
-        # Debug logging
-        print(f"✅ Retrieved {len(results)} memories")
-        print(f"✅ Collection size: {self.store._collection.count()}")
-
-        memories = "\n".join(
-            f"- {doc.page_content} (source={doc.metadata})"
-            for doc in results
-        )
-
-        return f"## Memories of user\n{memories}"
 
     def give_output(self, role_input, role):        
         response = self.agent.invoke(
@@ -222,39 +205,6 @@ class LLM():
         print(ai_message)
         return ai_message
 
-    # def generate_chunks(self, user_input: str, user_id: str):
-    #     # rel_mem = self.retrieve_context(user_input=user_input)
-    #     # print(rel_mem)
-    #     for token, metadata in self.agent.stream(
-    #         {"messages": [
-    #             # {"role": "system", "content": self.system_prompt},
-    #             {"role": "user", "content": str(user_input)}
-    #             ]},
-    #         {"configurable": {"thread_id": user_id}},
-    #         stream_mode="messages",
-    #     ):
-    #         output_chunk = None
-    #         # --- NEW FILTER LOGIC ---
-    #         # Only act when node is "model"
-    #         if metadata.get("langgraph_node") == "model":
-    #             # token.content_blocks is a list of dicts like:
-    #             # [{'type': 'text', 'text': 'Good'}]
-    #             for block in token.content_blocks:
-    #                 if block.get("type") == "text":
-    #                     # print(block.get("text"), end="")   # prints continuous text
-
-    #                     output_chunk = block.get("text")
-                    
-    #         # --- END OF NEW LOGIC ---
-
-    #         # --- ORIGINAL DEBUG PRINT (kept as requested, but you may comment out) ---
-    #         # print(f"\nnode: {metadata['langgraph_node']}")
-    #         # print(f"content: {token.content_blocks}")
-    #         # print("\n")
-    #         # --------------------------------------------
-    #             # --- YIELD ONLY IF VALID ---
-    #         if output_chunk is not None:
-    #             yield output_chunk
 
     def generate_chunks(self, user_input: str, user_id: str):
         for token, metadata in self.agent.stream(
