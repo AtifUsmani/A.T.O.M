@@ -1,15 +1,16 @@
-from memory.background_worker import run_in_background
-from langchain.agents.middleware import AgentMiddleware
-import time
-import re
-from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
+from typing import List, Literal, Optional
+import json
+import time
+import threading
+from langchain.agents.middleware import AgentMiddleware
 
-class MemoryDecision(BaseModel):
-    """Structured decision for whether something should become long-term memory"""
+class MemoryWriteDecision(BaseModel):
+    store: bool = Field(description="Whether to store the memory")
 
-    store: bool = Field(
-        description="Whether this information should be saved as long-term memory"
+    text: Optional[str] = Field(
+        default=None,
+        description="ONE short factual sentence for long-term memory"
     )
 
     type: Optional[Literal[
@@ -19,90 +20,40 @@ class MemoryDecision(BaseModel):
         "skill",
         "fact",
         "concern"
-    ]] = Field(
-        default=None,
-        description="Category of memory. Required only if store=true"
-    )
+    ]] = None
 
-    importance: Optional[int] = Field(
-        default=None,
-        ge=1,
-        le=5,
-        description="How important this memory is (1 = trivial, 5 = highly important). Required if store=true"
-    )
+    importance: Optional[int] = Field(ge=1, le=5)
+    confidence: Optional[float] = Field(ge=0.0, le=1.0)
 
-    confidence: Optional[float] = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-        description="How confident the judge is that this is correct memory (0–1). Required if store=true"
-    )
-
-    text: Optional[str] = Field(
-        default=None,
-        # description="Compressed single-sentence factual memory that should be stored. Required if store=true"
-        description=("Exactly one short factual sentence summarizing the memory. "
-                    "Plain English. Objective. Under ~20 words. "
-                    "MUST NOT include metadata, timestamps, reasoning, opinions, or narrative text. "
-                    "Example: 'User prefers the BMW M3 GTR.' "
-                    "REQUIRED if store=true.")
-    )
-
-    tags: Optional[List[str]] = Field(
-        default=None,
-        description="Optional short keywords for indexing the memory"
-    )
-
-class MemoryJudgeResult(BaseModel):
-    store: bool = Field(description="Whether to store memory")
-    type: Literal["project", "goal", "preference", "skill", "fact", "concern"] = Field(default="fact")
-    importance: float = Field(description="Importance 1-5")
-    confidence: float = Field(description="Confidence 0-1")
-    text: str = Field(description="ONE short factual sentence")
     tags: List[str] = Field(default_factory=list)
 
 class ConsolidationDecision(BaseModel):
-    action: Literal["keep_existing", "add_new", "replace_best"]
-    updated_text: str | None = Field(
-        default=None,
-        description="Required when action is replace_best"
-    )
+    action: Literal[
+        "keep_existing",
+        "add_new",
+        "replace_best"
+    ]
 
-THINK_BLOCK_REGEX = re.compile(r"<think>.*?</think>", re.DOTALL)
-
-def strip_think(text: str) -> str:
-    """
-    Removes all <think>...</think> blocks from model output.
-    """
-    if not text:
-        return text
-    return re.sub(THINK_BLOCK_REGEX, "", text).strip()
-
-import json
-import time
-
-def strip_think(text: str):
-    # Safe cleaner in case your judge wraps JSON
-    if "<think>" in text:
-        try:
-            text = text.split("</think>")[-1]
-        except:
-            pass
-    return text.strip()
-
-def run_in_background(fn):
-    import threading
-    threading.Thread(target=fn, daemon=True).start()
-
+    updated_text: Optional[str] = None
 class AsyncMemoryWriteMiddleware(AgentMiddleware):
+    """
+    Judge-controlled, async, KV-safe long-term memory writer.
+    """
+
     def __init__(self, memory, judge_model):
         self.memory = memory
         self.judge = judge_model
-        self.agent = None
 
+    # -------------------------------
+    # UTIL
+    # -------------------------------
+    def _run_async(self, fn):
+        threading.Thread(target=fn, daemon=True).start()
+
+    # -------------------------------
+    # AFTER AGENT
+    # -------------------------------
     def after_agent(self, state, runtime):
-        # print("✅ AsyncMemoryWriteMiddleware fired")
-
         messages = state.get("messages", [])
         if not messages:
             return None
@@ -116,47 +67,65 @@ class AsyncMemoryWriteMiddleware(AgentMiddleware):
         user_text = last_user.content
         ai_text   = last_ai.content
 
-        # print("🧠 MEMORY CANDIDATE:", user_text)
-
         def background_task():
-            # print("⚙️ BACKGROUND MEMORY TASK RUNNING")
+            print("\n🧠 [MEMORY] Evaluating candidate memory")
 
-            # ----------------------------------------------------
-            # JUDGE #1 — Is this memory-worthy at all?
-            # ----------------------------------------------------
+            # ====================================================
+            # JUDGE #1 — MEMORY FORMATION
+            # ====================================================
+            judge1 = self.judge.with_structured_output(MemoryWriteDecision)
+
             prompt = f"""
-You are a long-term memory formation engine for an AI assistant.
+You are a long-term memory detection engine for an AI assistant.
 
-You must decide whether this interaction contains something worth remembering
-for the user's future interactions.
+Your task is to decide whether this interaction contains
+STABLE, DECLARATIVE information about the USER that should
+be remembered long-term.
 
-Save ONLY if it is:
-- a long-term goal
-- a personal preference
-- an identity fact
-- an ongoing project
-- an emotionally meaningful concern
+DEFAULT:
+- Store memory if it is a clear statement about the user's
+  identity, preferences, goals, projects, skills, or emotional state.
 
-DO NOT save:
-- questions
-- commands
-- temporary info
-- jokes
-- general chit chat
+DO NOT STORE (store=false) if the user message is:
+- a greeting or social nicety (e.g. "hello", "how are you")
+- a question seeking information
+- small talk or phatic conversation
+- a command or instruction
+- temporary or situational information
+- a joke or casual remark
 
-If storing, compress it into ONE short factual sentence.
-Assign:
-- type: project | goal | preference | skill | fact | concern
-- importance: 1 to 5
-- confidence: 0 to 1
-- tags: list of short keywords
+IMPORTANT RULES:
+- QUESTIONS are NEVER long-term memory by themselves.
+- Only store DECLARATIVE statements about the user.
+- If the user is NOT stating something ABOUT THEMSELVES, do NOT store.
+ABSOLUTE CONSTRAINT (MUST FOLLOW):
+- NEVER store information about the assistant itself.
+- NEVER store statements beginning with or implying "I" that refer to the assistant.
+- If the statement is not ABOUT THE USER, set store=false.
+- Long-term memory is ONLY about the USER.
+- NEVER store information about the assistant itself.
+- Statements starting with:
+  "I am", "I was", "I do", "I prioritize"
+  MUST result in store=false.
+- Assistant identity, behavior, or capabilities
+  are NOT memory.
+ABSOLUTE RULE:
+If the memory text would describe the assistant
+(e.g. "I am ATOM", "I assist with tasks", "I am designed to"),
+you MUST set store=false.
 
-IF store=true, YOU MUST INCLUDE:
-- text: ONE short factual sentence describing the memory
+Only store information that would still be true weeks later.
 
-Reply ONLY in JSON. 
-If not worth saving, reply with:
-{{ "store": false }}
+Clarification:
+- "I" refers to the USER, not the assistant.
+- If "I" refers to the assistant, do NOT store.
+
+If store=true, you MUST:
+- Provide "text": ONE short factual sentence about the user.
+- Choose a type from: project | goal | preference | skill | fact | concern
+- Set importance (1–5) and confidence (0.0–1.0)
+
+If the information does not meet the above criteria, set store=false.
 
 User said:
 {user_text}
@@ -165,147 +134,169 @@ Assistant replied:
 {ai_text}
 """
 
-            result = self.judge.invoke(prompt)
-            clean = strip_think(result.content)
-
-            # judge1 = self.judge.with_structured_output(MemoryJudgeResult)
-
-            # result = judge1.invoke(prompt)
-
-            # print("🧪 JUDGE RAW:", result.content)
-            # print("🧽 CLEAN:", clean)
-
             try:
-                data = json.loads(clean)
-                # data = result["structured_response"]
-            except Exception:
-                # print("\n❌ Judge returned invalid JSON. Rejecting.\n")
-                return
+                decision: MemoryWriteDecision = judge1.invoke(prompt)
 
-            if not data.get("store"):
-                # print("\n❌ MEMORY REJECTED BY JUDGE\n")
-                return
+                # --- normalize confidence ---
+                if decision.confidence is not None and decision.confidence > 1.0:
+                    decision.confidence = decision.confidence / 100.0
 
-            required = ["type", "importance", "confidence", "text"]
-            if not all(k in data for k in required):
-                # print("\n❌ Judge missing required fields. Rejecting.\n")
-                return
+                # --- hard validation ---
+                if not decision.store:
+                    return
 
-            tags = data.get("tags", [])
-            if isinstance(tags, list):
-                tags = ", ".join(tags)
+                if not decision.text or not decision.type:
+                    return
 
-            # ----------------------------------------------------
-            # STEP 2 — Retrieve similar memories
-            # ----------------------------------------------------
-            try:
-                similar = self.memory.search(
-                    query=data["text"],
-                    top_k=5
-                )
+                if not (0.0 <= decision.confidence <= 1.0):
+                    print("❌ [MEMORY] Invalid confidence after normalization")
+                    return
             except Exception as e:
-                # print("\n⚠️ Retrieval failed, fallback to normal save:\n", e)
-                similar = []
-
-            existing_memories = []
-            for m in similar:
-                existing_memories.append({
-                    "id": m.get("id", None),
-                    "text": m.get("text", ""),
-                    "type": m.get("metadata", {}).get("type", ""),
-                    "importance": m.get("metadata", {}).get("importance", 1),
-                    "confidence": m.get("metadata", {}).get("confidence", 0),
-                    "score": m.get("score", 0)
-                })
-
-            # ----------------------------------------------------
-            # JUDGE #2 — Consolidation Decision
-            # ----------------------------------------------------
-            consolidation_prompt = (
-f"You are a long-term memory consolidation engine.\n\n"
-f"Here is a NEW candidate memory:\n"
-f"{json.dumps(data, indent=2)}\n\n"
-f"Here are EXISTING similar memories:\n"
-f"{json.dumps(existing_memories, indent=2)}\n\n"
-"Decide ONE of the following actions:\n"
-"- \"keep_existing\"  → do nothing\n"
-"- \"add_new\"        → store this as an additional memory\n"
-"- \"replace_best\"   → replace the most relevant existing memory with an improved one\n\n"
-"Rules:\n"
-"- Prefer replacing if the new memory is higher importance or clearer.\n"
-"- Prefer skipping if the new memory is weaker or redundant.\n"
-"- Prefer adding if it is meaningfully different.\n\n"
-"If replace_best:\n"
-"Return a new compressed memory summary text.\n\n"
-"Reply ONLY valid JSON like:\n"
-"{\n"
-"  \"action\": \"...\",\n"
-"  \"updated_text\": \"...\"\n"
-"}"
-)
-
-            decision = self.judge.invoke(consolidation_prompt)
-            decision_clean = strip_think(decision.content)
-
-            # judge2 = self.judge.with_structured_output(ConsolidationDecision)
-
-            # decision = judge2.invoke(consolidation_prompt)
-
-
-            # print("🧪 CONSOLIDATION RAW:", decision.content)
-            # print("🧽 CLEAN:", decision_clean)
-
-            try:
-                decision_json = json.loads(decision_clean)
-            except Exception:
-                # print("\n❌ Consolidation judge JSON invalid, fallback to add_new\n")
-                decision_json = {"action": "add_new"}
-
-            action = decision_json.get("action", "add_new")
-            updated_text = decision_json.get("updated_text", data["text"])
-
-            # ----------------------------------------------------
-            # APPLY DECISION
-            # ----------------------------------------------------
-            if action == "keep_existing":
-                # print("\n🛑 Judge decided existing memory is better. Skipping save.\n")
+                print("❌ [MEMORY] Judge #1 schema failure:", e)
                 return
 
-            elif action == "replace_best" and existing_memories:
-                best = max(existing_memories, key=lambda x: x.get("score", 0))
+            if not decision.store:
+                print("🚫 [MEMORY] Judge rejected memory")
+                print("    ↳ User:", user_text)
+                print("    ↳ Assistant:", ai_text)
+                return
 
-                if not best.get("id"):
-                    # print("\n⚠️ No memory ID available to update. Falling back to save new.\n")
-                    pass
-                else:
-                    try:
-                        self.memory.update(
-                            id=best["id"],
-                            new_text=updated_text
-                        )
-                        # print("\n♻️ Memory replaced and consolidated.\n")
-                        return
-                    except Exception as e:
-                        # print("\n❌ Replace failed, fallback saving new:", e)
-                        pass
+            if not decision.text or not decision.type:
+                print("❌ [MEMORY] Judge #1 violated contract:", decision)
+                return
 
-            # print("\n➕ Judge approved NEW memory. Saving…\n")
+            # Normalize type aliases
+            TYPE_ALIASES = {
+                "personal-preference": "preference",
+                "personal preference": "preference",
+                "identity-fact": "fact"
+            }
+            mem_type = TYPE_ALIASES.get(decision.type, decision.type)
 
-            try:
+            print(f"✅ [MEMORY] Candidate accepted → '{decision.text}'")
+            print(
+                f"📌 Type={mem_type} "
+                f"Importance={decision.importance} "
+                f"Confidence={decision.confidence}"
+            )
+
+            # ====================================================
+            # RETRIEVE SIMILAR MEMORIES
+            # ====================================================
+            similar = self.memory.search(
+                query=decision.text,
+                top_k=5
+            )
+
+            same_type = [
+                m for m in similar
+                if m.get("metadata", {}).get("type") == mem_type
+            ]
+
+            print(f"🔎 [MEMORY] Found {len(same_type)} similar memories of same type")
+
+            # ====================================================
+            # FAST PATH — NO SIMILARS
+            # ====================================================
+            if not same_type:
+                print("➕ [MEMORY] No similar memories → saving new memory")
                 self.memory.add(
-                    text=data["text"],
+                    text=decision.text,
                     metadata={
-                        "type": data["type"],
-                        "importance": data["importance"],
-                        "confidence": data["confidence"],
-                        "tags": tags,
+                        "type": mem_type,
+                        "importance": decision.importance,
+                        "confidence": decision.confidence,
+                        "tags": decision.tags,
                         "timestamp": time.time()
                     }
                 )
-                # print("\n✅ MEMORY SAVED\n")
-            except Exception as e:
-                # print("\n❌ Memory write failed:", e)
-                pass
+                print("💾 [MEMORY] Memory saved")
+                return
 
-        run_in_background(background_task)
+            # ====================================================
+            # JUDGE #2 — CONSOLIDATION
+            # ====================================================
+            judge2 = self.judge.with_structured_output(ConsolidationDecision)
+
+            consolidation_prompt = f"""
+You are a long-term memory consolidation engine.
+
+NEW memory:
+{decision.model_dump()}
+
+EXISTING similar memories:
+{json.dumps(same_type, indent=2)}
+
+Choose ONE action:
+- keep_existing
+- add_new
+- replace_best
+
+Rules:
+- Replace if new memory is clearer or more important
+- Skip if redundant or weaker
+- Add if meaningfully different
+
+If replace_best:
+- You MUST provide updated_text
+"""
+
+            try:
+                consolidation: ConsolidationDecision = judge2.invoke(consolidation_prompt)
+            except Exception as e:
+                print("❌ [MEMORY] Judge #2 schema failure:", e)
+                return
+
+            action = consolidation.action
+            print(f"🧠 [MEMORY] Consolidation decision → {action}")
+
+            if action == "keep_existing":
+                print("🛑 [MEMORY] Existing memory retained")
+                return
+
+            if action == "replace_best":
+                best = max(same_type, key=lambda m: m.get("score", 0))
+                if not consolidation.updated_text:
+                    print("❌ [MEMORY] replace_best missing updated_text")
+                    return
+
+                self.memory.update(
+                    memory_id=best["id"],
+                    new_text=consolidation.updated_text
+                )
+                print("♻️ [MEMORY] Memory replaced")
+                return
+
+            # add_new
+            self.memory.add(
+                text=decision.text,
+                metadata={
+                    "type": mem_type,
+                    "importance": decision.importance,
+                    "confidence": decision.confidence,
+                    "tags": decision.tags,
+                    "timestamp": time.time()
+                }
+            )
+            print("➕ [MEMORY] Additional memory saved")
+
+        # ----------------------------------
+        # HARD MEMORY WRITE GATE (CRITICAL)
+        # ----------------------------------
+        MIN_CHARS = 12
+        BANNED_UTTERANCES = {
+            "hi", "hello", "hey", "thanks", "ok", "okay", "cool", "lol"
+        }
+
+        user_text_clean = user_text.strip().lower()
+
+        if len(user_text_clean) < MIN_CHARS:
+            print(f"🚫 [MEMORY] Write skipped (too short): {repr(user_text)}")
+            return None
+
+        if user_text_clean in BANNED_UTTERANCES:
+            print(f"🚫 [MEMORY] Write skipped (greeting/filler): {repr(user_text)}")
+            return None
+
+        self._run_async(background_task)
         return None
