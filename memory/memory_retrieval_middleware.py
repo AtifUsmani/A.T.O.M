@@ -3,21 +3,49 @@ from datetime import datetime, timezone
 import math
 import re
 
-def render_memory_block(memories, max_items=4):
-    # dedupe while preserving order
-    seen = set()
-    unique = []
-    for m in memories:
-        t = m["text"]
-        if t and t not in seen:
-            seen.add(t)
-            unique.append(t)
+MEMORY_SLOTS = 4          # number of lines
+CHARS_PER_SLOT = 96       # characters per slot (pick once)
 
-    slots = unique[:max_items]
-    while len(slots) < max_items:
-        slots.append("")
+def fixed_width(text: str, width: int) -> str:
+    text = normalize_memory_text(text)
 
-    return "\n".join(f"- {s}" if s else "- " for s in slots)
+    if len(text) > width:
+        text = text[:width]
+
+    # Right-pad with spaces to enforce fixed size
+    return text + (" " * (width - len(text)))
+
+def normalize_memory_text(text: str) -> str:
+    if not text:
+        return ""
+
+    # Remove newlines (critical)
+    text = text.replace("\n", " ").replace("\r", " ")
+
+    # Collapse whitespace
+    text = re.sub(r"\s+", " ", text)
+
+    # ASCII-only (recommended for tokenizer stability)
+    text = text.encode("ascii", "ignore").decode()
+
+    # Prevent marker injection
+    text = text.replace("<", "").replace(">", "")
+
+    return text.strip()
+
+def render_memory_block(memories):
+    """
+    memories: list of dicts with at least {"text": "..."}
+    Returns a KV-stable memory block string.
+    """
+    lines = []
+
+    for i in range(MEMORY_SLOTS):
+        text = memories[i]["text"] if i < len(memories) else ""
+        payload = fixed_width(text, CHARS_PER_SLOT)
+        lines.append(f"[{i+1:02d}] {payload}")
+
+    return "\n".join(lines)
 
 class MemoryRetrievalMiddleware(AgentMiddleware):
     """
@@ -30,9 +58,7 @@ class MemoryRetrievalMiddleware(AgentMiddleware):
         self.k = k
         self.max_items = max_items
 
-    def before_model(self, state: AgentState, runtime):
-        normalized = []
-        
+    def before_model(self, state: AgentState, runtime):        
         assert any(m.type == "system" for m in state["messages"]), \
             "❌ No SystemMessage in state"
         messages = state.get("messages", [])
@@ -91,11 +117,6 @@ class MemoryRetrievalMiddleware(AgentMiddleware):
                 else:
                     continue
 
-                normalized.append({
-                    "text": text,
-                    "metadata": meta
-                })
-
                 strength = meta.get("strength", 1.0)
 
                 try:
@@ -109,11 +130,8 @@ class MemoryRetrievalMiddleware(AgentMiddleware):
                     "metadata": meta
                 }))
 
-            top = sorted(scored, key=lambda x: x[0], reverse=True)[:self.max_items]
+            top = sorted(scored, key=lambda x: x[0], reverse=True)[:MEMORY_SLOTS]
 
-            memory_block = "\n".join(
-                f"- {m['text']}" for _, m in top
-            )
 
             # Update access metadata (lightweight reinforcement)
             for _, m in top:
@@ -122,14 +140,10 @@ class MemoryRetrievalMiddleware(AgentMiddleware):
                 meta["access_count"] = meta.get("access_count", 0) + 1
 
         # print("[MEMORY] Retrieved:", [m["text"] for m in memories])
-
-        # 🔒 SLOT REPLACEMENT (cache-safe)
-        # system_msg.content = system_msg.content.replace(
-        #     "[LONG_TERM_MEMORY]\n(empty)",
-        #     "[LONG_TERM_MEMORY]\n" + memory_block
-        # )
         
-        block = render_memory_block(normalized, self.max_items)
+        top_memories = [m for _, m in top]
+
+        block = render_memory_block(top_memories)
 
         system_msg.content = re.sub(
             r"<<<LONG_TERM_MEMORY_START>>>.*?<<<LONG_TERM_MEMORY_END>>>",
